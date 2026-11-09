@@ -1,98 +1,62 @@
+"""Train the final stroke model and save it as stroke_model.pkl.
+
+Uses the same pipeline as the notebook: imputation, scaling, one-hot encoding,
+undersampling and SMOTE are steps inside one imblearn pipeline, so resampling
+only ever touches the training data. Logistic regression was the best model on
+the held-out test set (ROC AUC 0.84), so it is the one saved here, trained on
+all available data.
+
+Usage: python Model_saving.py [path/to/healthcare-dataset-stroke-data.csv]
+"""
+
+import sys
+
+import joblib
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.pipeline import Pipeline as sk_pipeline
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.ensemble import RandomForestClassifier, VotingClassifier
-from sklearn.feature_selection import SelectKBest, mutual_info_classif
 from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.under_sampling import RandomUnderSampler
-from imblearn.pipeline import Pipeline
-from collections import Counter
-import joblib  # Import joblib for saving the model
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from xgboost import XGBClassifier
-from sklearn.metrics import classification_report, roc_auc_score
+NUMERIC = ["age", "avg_glucose_level", "bmi"]
+BINARY = ["hypertension", "heart_disease"]
+CATEGORICAL = ["gender", "ever_married", "work_type", "Residence_type", "smoking_status"]
 
-data = pd.read_csv(r"C:\Users\kresi\OneDrive\Desktop\Turing college\Project9\healthcare-dataset-stroke-data.csv")
-data['bmi'].fillna(data['bmi'].mean(), inplace=True)
 
-le = LabelEncoder()
-text_data_features = [
-    'gender', 'ever_married', 'work_type', 
-    'Residence_type', 'smoking_status'
-]
-for feature in text_data_features:
-    data[feature] = le.fit_transform(data[feature])
+def build_model() -> ImbPipeline:
+    preprocess = ColumnTransformer([
+        ("num", Pipeline([("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler())]), NUMERIC),
+        ("cat", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL),
+        ("bin", "passthrough", BINARY),
+    ])
+    return ImbPipeline([
+        ("prep", preprocess),
+        ("under", RandomUnderSampler(sampling_strategy=0.1, random_state=42)),
+        ("over", SMOTE(sampling_strategy=1.0, random_state=42)),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
 
-over = SMOTE(sampling_strategy=1)
-under = RandomUnderSampler(sampling_strategy=0.1)
-f1 = data.loc[:, :'smoking_status']
-t1 = data.loc[:, 'stroke']
-steps = [('under', under), ('over', over)]
-pipeline = Pipeline(steps=steps)
-f1, t1 = pipeline.fit_resample(f1, t1)
-Counter(t1)
 
-x_train, x_test, y_train, y_test = train_test_split(
-    f1, t1, test_size=0.15, random_state=2
-)
+def main() -> None:
+    path = sys.argv[1] if len(sys.argv) > 1 else "healthcare-dataset-stroke-data.csv"
+    data = pd.read_csv(path)
+    X = data[NUMERIC + BINARY + CATEGORICAL]
+    y = data["stroke"]
 
-def select_features(x_train, y_train, x_test):
-    fs = SelectKBest(score_func=mutual_info_classif, k='all')
-    fs.fit(x_train, y_train)
-    x_train_fs = fs.transform(x_train)
-    x_test_fs = fs.transform(x_test)
-    return x_train_fs, x_test_fs, fs
+    model = build_model()
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    scores = cross_val_score(model, X, y, cv=cv, scoring="roc_auc")
+    print(f"5-fold cross-validated ROC AUC: {scores.mean():.3f} (± {scores.std():.3f})")
 
-x_train_fs, x_test_fs, fs = select_features(x_train, y_train, x_test)
+    model.fit(X, y)
+    joblib.dump(model, "stroke_model.pkl")
+    print("Model saved as 'stroke_model.pkl'")
 
-pipeline_xgb = Pipeline([
-    ('scaler', StandardScaler()),
-    ('selector', SelectKBest(score_func=mutual_info_classif, k='all')),
-    ('classifier', XGBClassifier())
-])
 
-pipeline_rf = Pipeline([
-    ('scaler', StandardScaler()),
-    ('selector', SelectKBest(score_func=mutual_info_classif, k='all')),
-    ('classifier', RandomForestClassifier())
-])
-
-param_grid_xgb = {
-    'classifier__learning_rate': [0.01, 0.1, 0.2],
-    'classifier__max_depth': [3, 5, 7],
-    'classifier__n_estimators': [100, 500, 1000]
-}
-
-param_grid_rf = {
-    'classifier__n_estimators': [100, 500, 1000],
-    'classifier__max_depth': [None, 10, 20],
-    'classifier__min_samples_split': [2, 5, 10]
-}
-
-grid_search_xgb = GridSearchCV(
-    pipeline_xgb, param_grid_xgb, cv=5, scoring='roc_auc'
-)
-grid_search_rf = GridSearchCV(
-    pipeline_rf, param_grid_rf, cv=5, scoring='roc_auc'
-)
-
-grid_search_xgb.fit(x_train_fs, y_train)
-grid_search_rf.fit(x_train_fs, y_train)
-
-ensemble = VotingClassifier(estimators=[
-    ('xgb', grid_search_xgb.best_estimator_),
-    ('rf', grid_search_rf.best_estimator_)
-], voting='soft')
-
-ensemble.fit(x_train_fs, y_train)
-
-def model_evaluation(model, x_test, y_test):
-    prediction = model.predict(x_test)
-    print("Classification Report:\n", classification_report(y_test, prediction))
-    print("ROC_AUC Score: ", '{0:.2%}'.format(roc_auc_score(y_test, model.predict_proba(x_test)[:, 1])))
-
-model_evaluation(ensemble, x_test_fs, y_test)
-
-joblib.dump(ensemble, 'ensemble_model.pkl')
-print("Model saved as 'ensemble_model.pkl'")
+if __name__ == "__main__":
+    main()

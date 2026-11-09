@@ -12,3 +12,7 @@ venv/
 .DS_Store
 .vscode/
 .idea/
+
+# Data and trained model (download the data from Kaggle, see README)
+healthcare-dataset-stroke-data.csv
+*.pkl

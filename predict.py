@@ -1,29 +1,34 @@
-import pandas as pd
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+"""Predict stroke risk for new patients with the model saved by Model_saving.py.
+
+The input CSV needs the same columns as the training data (gender, age,
+hypertension, heart_disease, ever_married, work_type, Residence_type,
+avg_glucose_level, bmi, smoking_status); id and stroke are ignored if present.
+All encoding and scaling happen inside the saved pipeline.
+
+Usage: python predict.py patients.csv [threshold]
+"""
+
+import sys
+
 import joblib
+import pandas as pd
 
-new_data = pd.read_csv("C:\\Users\kresi\\OneDrive\\Desktop\\Turing college\\Project9\\healthcare-dataset-stroke-data.csv")
+from Model_saving import BINARY, CATEGORICAL, NUMERIC
 
-new_data = new_data.drop('id', axis=1)
 
-text_data_features = ['gender', 'ever_married', 'work_type', 'Residence_type', 'smoking_status']
+def main() -> None:
+    if len(sys.argv) < 2:
+        sys.exit("Usage: python predict.py patients.csv [threshold]")
+    threshold = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5
+    patients = pd.read_csv(sys.argv[1])
+    model = joblib.load("stroke_model.pkl")
 
-le = LabelEncoder()
-scaler = StandardScaler()
+    risk = model.predict_proba(patients[NUMERIC + BINARY + CATEGORICAL])[:, 1]
+    out = pd.DataFrame({"stroke_risk": risk.round(3), "flagged": (risk >= threshold).astype(int)})
+    if "id" in patients:
+        out.insert(0, "id", patients["id"])
+    print(out.to_string(index=False))
 
-for feature in text_data_features:
-    new_data[feature] = le.fit_transform(new_data[feature])
 
-new_data['bmi'].fillna(new_data['bmi'].mean(), inplace=True)
-
-numerical_features = ['age', 'bmi', 'avg_glucose_level']
-
-scaler.fit(new_data[numerical_features])
-
-new_data[numerical_features] = scaler.transform(new_data[numerical_features])
-
-model = joblib.load('ensemble_model.pkl')
-
-predictions = model.predict(new_data)
-
-print(predictions)
+if __name__ == "__main__":
+    main()

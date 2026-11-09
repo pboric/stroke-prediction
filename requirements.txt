@@ -5,8 +5,8 @@ matplotlib
 seaborn
 scipy
 scikit-learn
-imblearn
+imbalanced-learn
 xgboost
 statsmodels
-google-colab
-ipython
+joblib
+jupyter
